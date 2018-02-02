@@ -1,0 +1,4 @@
+name = "State-Tracker"
+# badges = ["travis"]
+module_maker="ModuleBuildTiny"
+
