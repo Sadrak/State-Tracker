@@ -16,11 +16,7 @@ our %OPS = map { $_ => 1 } qw/
 
 use constant CHECK_POSITIVE => 0;
 use constant CHECK_NEGATIVE => 1;
-use constant CHECK_COUNTER  => 2;
-use constant CALLBACK       => 3;
-
-use constant EXPONENT => 0;
-use constant INTEGER  => 1;
+use constant CALLBACK       => 2;
 
 use overload
     '<' => 'enable',
@@ -53,10 +49,10 @@ sub new {
 sub to_string {
     my ($self) = @_;
 
-    my %state_for = 
-        map { $STATES{$_}[EXPONENT] => $_ }
+    my %state_for =
+        map { $STATES{$_} => $_ }
         keys(%STATES);
-    
+
     return join(
         ';',
         $_[0]->{state},
@@ -73,45 +69,42 @@ sub compare {
 
 sub state {
     my ($self) = @_;
-    
+
     $self->{state};
 }
 
 sub counter {
-    my ($self, $state, $set) = @_;
+    my ($self, $state) = @_;
 
     $STATES{$state} //= $self->new_state;
 
-    $self->{counter}{ $STATES{$state}[EXPONENT] } if defined $set;
-
-    $self->{counter}{ $STATES{$state}[EXPONENT] };
+    return $self->{counter}{ $STATES{$state} };
 }
 
 {
     my $current_integer_exponent = 0;
     sub new_state {
-        # +0 is required, otherwise the first element will already be incremented
-        my $new_state = [$current_integer_exponent+0, 2**$current_integer_exponent++];
-        return $new_state;
+        return 2**$current_integer_exponent++;
     }
 }
 
 sub enable {
     my ($self, $states) = @_;
 
-    my $change = 0;
+    my $has_changed = 0;
     my $last_state = $self->{state};
 
     foreach my $state (split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
-        if (~$self->{state} & $STATES{$state}[INTEGER]) {
-            $self->{state} |= $STATES{$state}[INTEGER];
-            $change |= $STATES{$state}[INTEGER];
+        if (~$self->{state} & $STATES{$state}) {
+            $self->{state} |= $STATES{$state};
+            $self->{counter}{ $STATES{$state} } = 1 if $self->{counter}{ $STATES{$state} } // 1 <= 0;
+            $has_changed |= $STATES{$state};
         }
     }
 
-    $self->change($change) if $change;
+    $self->_trigger($has_changed) if $has_changed;
 
     return $last_state != $self->{state};
 }
@@ -119,38 +112,39 @@ sub enable {
 sub disable {
     my ($self, $states) = @_;
 
-    my $change = 0;
+    my $has_changed = 0;
     my $last_state = $self->{state};
 
     foreach my $state (split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
-        if ($self->{state} & $STATES{$state}[INTEGER]) {
-            $self->{state} &= ~$STATES{$state}[INTEGER];
-            $change |= $STATES{$state}[INTEGER];
+        if ($self->{state} & $STATES{$state}) {
+            $self->{state} &= ~$STATES{$state};
+            $self->{counter}{ $STATES{$state} } = 0 if $self->{counter}{ $STATES{$state} } // 0 > 0;
+            $has_changed |= $STATES{$state};
         }
     }
 
-    $self->change($change) if $change;
-    
+    $self->_trigger($has_changed) if $has_changed;
+
     return $last_state != $self->{state};
 }
 
 sub toggle {
     my ($self, $states) = @_;
 
-    my $change = 0;
+    my $has_changed = 0;
     my $last_state = $self->{state};
 
     my %uniq;
     foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
-        $self->{state} ^= $STATES{$state}[INTEGER];
-        $change |= $STATES{$state}[INTEGER];
+        $self->{state} ^= $STATES{$state};
+        $has_changed |= $STATES{$state};
     }
 
-    $self->change($change) if $change;
+    $self->_trigger($has_changed) if $has_changed;
 
     return 1;
 }
@@ -159,7 +153,7 @@ sub increment {
     my ($self, $states, $increment) = @_;
 
     $increment ||= 1;
-    my $change = 0;
+    my $has_changed = 0;
     my $total = 0;
 
     if (ref($states)) {
@@ -171,12 +165,12 @@ sub increment {
         $STATES{$state} //= $self->new_state;
 
         $total += $increment;
-        $self->{counter}{ $STATES{$state}[EXPONENT] } += $increment;
-        $self->{state} |= $STATES{$state}[INTEGER] if $self->{counter}{ $STATES{$state}[EXPONENT] } > 0;
-        $change |= $STATES{$state}[INTEGER];
+        $self->{counter}{ $STATES{$state} } += $increment;
+        $self->{state} |= $STATES{$state} if $self->{counter}{ $STATES{$state} } > 0;
+        $has_changed |= $STATES{$state};
     }
 
-    $self->change($change) if $change;
+    $self->_trigger($has_changed) if $has_changed;
 
     return $total;
 }
@@ -184,8 +178,8 @@ sub increment {
 sub decrement {
     my ($self, $states, $decrement) = @_;
 
-    $decrement //= 1;
-    my $change = 0;
+    $decrement ||= 1;
+    my $has_changed = 0;
     my $total = 0;
 
     my %uniq;
@@ -193,18 +187,63 @@ sub decrement {
         $STATES{$state} //= $self->new_state;
 
         $total += $decrement;
-        $self->{counter}{ $STATES{$state}[EXPONENT] } -= $decrement;
-        $self->{state} &= ~$STATES{$state}[INTEGER] if $self->{counter}{ $STATES{$state}[EXPONENT] } <= 0;
-        $change |= $STATES{$state}[INTEGER];
+        $self->{counter}{ $STATES{$state} } -= $decrement;
+        $self->{state} &= ~$STATES{$state} if $self->{counter}{ $STATES{$state} } <= 0;
+        $has_changed |= $STATES{$state};
     }
 
-    $self->change($change) if $change;
+    $self->_trigger($has_changed) if $has_changed;
 
     return $total;
 }
 
-sub change {
-    my ($self, $change) = @_;
+sub set {
+    my ($self, $states, $set) = @_;
+
+    $set //= 0;
+    my $has_changed = 0;
+    my $total = 0;
+
+    my %uniq;
+    foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
+        $STATES{$state} //= $self->new_state;
+
+        $total += $set;
+        $self->{counter}{ $STATES{$state} } = $set;
+        $self->{state} |= $STATES{$state}  if $self->{counter}{ $STATES{$state} } > 0;
+        $self->{state} &= ~$STATES{$state} if $self->{counter}{ $STATES{$state} } <= 0;
+        $has_changed |= $STATES{$state};
+    }
+
+    $self->_trigger($has_changed) if $has_changed;
+
+    return $total;
+}
+
+sub track {
+    my ($self, $cb, @states) = @_;
+
+    my @check = (0, ~0, $cb);
+    $self->{tracks}{$cb+0} = \@check;
+
+    foreach my $state (@states) {
+
+        if (index($state,'~') == 0) {
+            substr($state, 0, 1, '');
+            $STATES{$state} //= $self->new_state;
+            $check[CHECK_NEGATIVE] &= ~$STATES{$state};
+        }
+        else {
+            $STATES{$state} //= $self->new_state;
+            $check[CHECK_POSITIVE] |= $STATES{$state};
+        }
+    }
+
+    return $cb+0;
+}
+
+sub _trigger {
+    my ($self, $has_changed) = @_;
 
     # FIXME don't check every track, build a hash lookup which state
     # can trigger which track
@@ -214,63 +253,15 @@ sub change {
         ($check[CHECK_POSITIVE] & $self->{state}) == $check[CHECK_POSITIVE] or next TRACK;
         ($check[CHECK_NEGATIVE] | $self->{state}) == $check[CHECK_NEGATIVE] or next TRACK;
 
-        my $counter_changed = 0;
-        foreach my $exponent (keys(%{ $check[CHECK_COUNTER] })) {
-            foreach my $op (keys(%{ $check[CHECK_COUNTER]{$exponent} })) {
-                if    ($op eq '<' ) { ($self->{counter}{ $exponent } // 0) <  $check[CHECK_COUNTER]{$exponent}{$op} or next TRACK; }
-                elsif ($op eq '<=') { ($self->{counter}{ $exponent } // 0) <= $check[CHECK_COUNTER]{$exponent}{$op} or next TRACK; }
-                elsif ($op eq '>' ) { ($self->{counter}{ $exponent } // 0) >  $check[CHECK_COUNTER]{$exponent}{$op} or next TRACK; }
-                elsif ($op eq '>=') { ($self->{counter}{ $exponent } // 0) >= $check[CHECK_COUNTER]{$exponent}{$op} or next TRACK; }
-                else                { ($self->{counter}{ $exponent } // 0) == $check[CHECK_COUNTER]{$exponent}{$op} or next TRACK; }
-            }
-            $counter_changed |= 1 << $exponent;
-        }
-
-        ($check[CHECK_POSITIVE] & $change)
-            or (~$check[CHECK_NEGATIVE] & $change)
-            or ($counter_changed and $counter_changed & $change)
+        ($check[CHECK_POSITIVE] & $has_changed)
+            or (~$check[CHECK_NEGATIVE] & $has_changed)
             or next TRACK;
 
-        $check[CALLBACK]->($self, $change)
+        $check[CALLBACK]->($self, $has_changed)
             or delete($self->{tracks}{$cb+0});
     }
 
     return;
-}
-
-sub track {
-    my ($self, $cb, @states) = @_;
-
-    my @check = (0, ~0, {}, $cb);
-    $self->{tracks}{$cb+0} = \@check;
-
-    foreach my $state (@states) {
-
-        if (ref($state)) {
-            ($state, my $op, my $count) = @$state;
-            if (not defined $count) {
-                $count = $op;
-                $op = '==';
-            }
-
-            # FIXME better to die?
-            $OPS{$op} or return;
-
-            $STATES{$state} //= $self->new_state;
-            $check[CHECK_COUNTER]{ $STATES{$state}[EXPONENT] }{$op} = $count;
-        }
-        elsif (index($state,'~') == 0) {
-            substr($state, 0, 1, '');
-            $STATES{$state} //= $self->new_state;
-            $check[CHECK_NEGATIVE] &= ~$STATES{$state}[INTEGER];
-        }
-        else {
-            $STATES{$state} //= $self->new_state;
-            $check[CHECK_POSITIVE] |= $STATES{$state}[INTEGER];
-        }
-    }
-
-    return $cb+0;
 }
 
 1;
