@@ -26,10 +26,10 @@ foreach my $class ($class_normal, $class_binary) {
         ok(!$tracker->enable($flag1));  ok($tracker == 1);
         ok($tracker->disable($flag1));  ok($tracker == 0);
         ok(!$tracker->disable($flag1)); ok($tracker == 0);
-        
+
         ok($tracker->enable($flag2a3));  ok($tracker == 6);
         ok($tracker->disable($flag1a3)); ok($tracker == 2);
-        
+
         ok($tracker->enable([$flag2, $flag3]));  ok($tracker == 6);
         ok($tracker->disable([$flag1, $flag3])); ok($tracker == 2);
     };

@@ -171,7 +171,7 @@ sub increment {
 
     $increment ||= 1;
     my $total = 0;
-    
+
     foreach my $state (_active_bits($has_changed)) {
         $total += $increment;
         ($self->{counter}{ $state } //= $self->{state} & $state ? 1 : 0) += $increment;
@@ -197,7 +197,7 @@ sub decrement {
 
     $decrement ||= 1;
     my $total = 0;
-    
+
     foreach my $state (_active_bits($has_changed)) {
         $total += $decrement;
         ($self->{counter}{ $state } //= $self->{state} & $state ? 1 : 0) -= $decrement;
@@ -219,7 +219,7 @@ sub set {
 
     $set //= 0;
     my $total = 0;
-    
+
     foreach my $state (_active_bits(ref($states) ? reduce { $a | $b } @$states : $states)) {
         if (($self->{counter}{ $state } // $self->{state} & $state ? 1 : 0) != $set) {
             $total += $set;

@@ -81,7 +81,7 @@ sub counter {
     my %uniq;
     foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
-    
+
         $total += $self->{counter}{ $STATES{$state} } // ($self->{state} & $STATES{$state} ? 1 : 0);
     }
 
