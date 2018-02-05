@@ -246,7 +246,7 @@ sub _trigger {
     my ($self, $has_changed) = @_;
 
     # FIXME don't check every track, build a hash lookup which state
-    # can trigger which track
+    # can trigger which track when adding tracks
     TRACK: foreach my $cb (keys(%{ $self->{tracks} })) {
         my @check = @{ $self->{tracks}{$cb} };
 
