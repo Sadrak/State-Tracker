@@ -74,11 +74,18 @@ sub state {
 }
 
 sub counter {
-    my ($self, $state) = @_;
+    my ($self, $states) = @_;
 
-    $STATES{$state} //= $self->new_state;
+    my $total = 0;
 
-    return $self->{counter}{ $STATES{$state} };
+    my %uniq;
+    foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
+        $STATES{$state} //= $self->new_state;
+    
+        $total += $self->{counter}{ $STATES{$state} } // ($self->{state} & $STATES{$state} ? 1 : 0);
+    }
+
+    return $total;
 }
 
 {
@@ -91,86 +98,101 @@ sub counter {
 sub enable {
     my ($self, $states) = @_;
 
-    my $has_changed = 0;
-    my $last_state = $self->{state};
+    my $changed_state = 0;
+    my @changes;
 
-    foreach my $state (split(m{\|}, $states)) {
+    foreach my $state (ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
         if (~$self->{state} & $STATES{$state}) {
             $self->{state} |= $STATES{$state};
-            $self->{counter}{ $STATES{$state} } = 1 if $self->{counter}{ $STATES{$state} } // 1 <= 0;
-            $has_changed |= $STATES{$state};
+            delete($self->{counter}{ $STATES{$state} }) if $self->{counter}{ $STATES{$state} } // 1 <= 0;
+            $changed_state |= $STATES{$state};
+            push(@changes, $state);
         }
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
 
-    return $last_state != $self->{state};
+    $self->_trigger($changed_state, $return) if $changed_state;
+
+    return $return;
 }
 
 sub disable {
     my ($self, $states) = @_;
 
-    my $has_changed = 0;
-    my $last_state = $self->{state};
+    my $changed_state = 0;
+    my @changes;
 
-    foreach my $state (split(m{\|}, $states)) {
+    foreach my $state (ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
         if ($self->{state} & $STATES{$state}) {
             $self->{state} &= ~$STATES{$state};
-            $self->{counter}{ $STATES{$state} } = 0 if $self->{counter}{ $STATES{$state} } // 0 > 0;
-            $has_changed |= $STATES{$state};
+            delete($self->{counter}{ $STATES{$state} }) if $self->{counter}{ $STATES{$state} } // 0 > 0;
+            $changed_state |= $STATES{$state};
+            push(@changes, $state);
         }
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
 
-    return $last_state != $self->{state};
+    $self->_trigger($changed_state, $return) if $changed_state;
+
+    return $return;
 }
 
 sub toggle {
     my ($self, $states) = @_;
 
-    my $has_changed = 0;
-    my $last_state = $self->{state};
+    my $changed_state = 0;
+    my @changes;
 
     my %uniq;
-    foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
+    foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
         $self->{state} ^= $STATES{$state};
-        $has_changed |= $STATES{$state};
+        if ($self->{state} & $STATES{$state}) { delete($self->{counter}{ $STATES{$state} }) if $self->{counter}{ $STATES{$state} } // 1 <= 0; }
+        else                                  { delete($self->{counter}{ $STATES{$state} }) if $self->{counter}{ $STATES{$state} } // 0 >  0; }
+        $changed_state |= $STATES{$state};
+        push(@changes, $state);
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
 
-    return 1;
+    $self->_trigger($changed_state, $return) if $changed_state;
+
+    return $return;
 }
 
 sub increment {
     my ($self, $states, $increment) = @_;
 
-    $increment ||= 1;
-    my $has_changed = 0;
-    my $total = 0;
-
-    if (ref($states)) {
+    if (ref($states) and (ref($states->[0]) or @_ == 2 or ($increment // '') eq '')) {
         ($states, $increment) = @$states;
     }
 
+    $increment ||= 1;
+    my $changed_state = 0;
+    my @changes;
+    my $total = 0;
+
     my %uniq;
-    foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
+    foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
         $total += $increment;
-        $self->{counter}{ $STATES{$state} } += $increment;
+        ($self->{counter}{ $STATES{$state} } //= $self->{state} & $STATES{$state} ? 1 : 0) += $increment;
         $self->{state} |= $STATES{$state} if $self->{counter}{ $STATES{$state} } > 0;
-        $has_changed |= $STATES{$state};
+        $changed_state |= $STATES{$state};
+        push(@changes, $state);
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
+
+    $self->_trigger($changed_state, $return) if $changed_state;
 
     return $total;
 }
@@ -178,21 +200,29 @@ sub increment {
 sub decrement {
     my ($self, $states, $decrement) = @_;
 
+    if (ref($states) and (ref($states->[0]) or @_ == 2 or ($decrement // '') eq '')) {
+        ($states, $decrement) = @$states;
+    }
+
     $decrement ||= 1;
-    my $has_changed = 0;
+    my $changed_state = 0;
+    my @changes;
     my $total = 0;
 
     my %uniq;
-    foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
+    foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
         $total += $decrement;
-        $self->{counter}{ $STATES{$state} } -= $decrement;
+        ($self->{counter}{ $STATES{$state} } //= $self->{state} & $STATES{$state} ? 1 : 0) -= $decrement;
         $self->{state} &= ~$STATES{$state} if $self->{counter}{ $STATES{$state} } <= 0;
-        $has_changed |= $STATES{$state};
+        $changed_state |= $STATES{$state};
+        push(@changes, $state);
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
+
+    $self->_trigger($changed_state, $return) if $changed_state;
 
     return $total;
 }
@@ -201,41 +231,50 @@ sub set {
     my ($self, $states, $set) = @_;
 
     $set //= 0;
-    my $has_changed = 0;
+    my $changed_state = 0;
+    my @changes;
     my $total = 0;
 
     my %uniq;
-    foreach my $state (grep { ++$uniq{$_} == 1 } split(m{\|}, $states)) {
+    foreach my $state (grep { ++$uniq{$_} == 1 } ref($states) ? @$states : split(m{\|}, $states)) {
         $STATES{$state} //= $self->new_state;
 
-        $total += $set;
-        $self->{counter}{ $STATES{$state} } = $set;
-        $self->{state} |= $STATES{$state}  if $self->{counter}{ $STATES{$state} } > 0;
-        $self->{state} &= ~$STATES{$state} if $self->{counter}{ $STATES{$state} } <= 0;
-        $has_changed |= $STATES{$state};
+        if (($self->{counter}{ $STATES{$state} } // $self->{state} & $STATES{$state} ? 1 : 0) != $set) {
+            $total += $set;
+            $self->{counter}{ $STATES{$state} } = $set;
+            if ($self->{counter}{ $STATES{$state} } > 0) { $self->{state} |= $STATES{$state}; }
+            else                                         { $self->{state} &= ~$STATES{$state}; }
+            $changed_state |= $STATES{$state};
+            push(@changes, $state);
+        }
     }
 
-    $self->_trigger($has_changed) if $has_changed;
+    my $return = ref($states) ? \@changes : join('|', @changes);
+
+    $self->_trigger($changed_state, $return) if $changed_state;
 
     return $total;
 }
 
 sub track {
-    my ($self, $cb, @states) = @_;
+    my ($self, @args) = @_;
+    my $cb = pop(@args);
+    my %options = @args;
 
     my @check = (0, ~0, $cb);
     $self->{tracks}{$cb+0} = \@check;
 
-    foreach my $state (@states) {
-
-        if (index($state,'~') == 0) {
-            substr($state, 0, 1, '');
-            $STATES{$state} //= $self->new_state;
-            $check[CHECK_NEGATIVE] &= ~$STATES{$state};
-        }
-        else {
+    if (exists($options{enabled})) {
+        foreach my $state (ref($options{enabled}) ? @{ $options{enabled} } : split(m{\|}, $options{enabled})) {
             $STATES{$state} //= $self->new_state;
             $check[CHECK_POSITIVE] |= $STATES{$state};
+        }
+    }
+
+    if (exists($options{disabled})) {
+        foreach my $state (ref($options{disabled}) ? @{ $options{disabled} } : split(m{\|}, $options{disabled})) {
+            $STATES{$state} //= $self->new_state;
+            $check[CHECK_NEGATIVE] &= ~$STATES{$state};
         }
     }
 
@@ -243,7 +282,7 @@ sub track {
 }
 
 sub _trigger {
-    my ($self, $has_changed) = @_;
+    my ($self, $changed_state, $return) = @_;
 
     # FIXME don't check every track, build a hash lookup which state
     # can trigger which track when adding tracks
@@ -253,11 +292,11 @@ sub _trigger {
         ($check[CHECK_POSITIVE] & $self->{state}) == $check[CHECK_POSITIVE] or next TRACK;
         ($check[CHECK_NEGATIVE] | $self->{state}) == $check[CHECK_NEGATIVE] or next TRACK;
 
-        ($check[CHECK_POSITIVE] & $has_changed)
-            or (~$check[CHECK_NEGATIVE] & $has_changed)
+        ($check[CHECK_POSITIVE] & $changed_state)
+            or (~$check[CHECK_NEGATIVE] & $changed_state)
             or next TRACK;
 
-        $check[CALLBACK]->($self, $has_changed)
+        $check[CALLBACK]->($self, $return)
             or delete($self->{tracks}{$cb+0});
     }
 
