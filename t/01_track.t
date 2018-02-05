@@ -16,7 +16,7 @@ subtest "basic", sub {
     my $tracker = new_ok "State::Tracker";
 
     my $executed = 0;
-    $tracker->callback(
+    $tracker->track(
         sub {
             $executed++;
             return 1;
@@ -39,7 +39,7 @@ subtest "stop", sub {
     my $tracker = new_ok "State::Tracker";
 
     my $executed = 0;
-    $tracker->callback(
+    $tracker->track(
         sub {
             $executed++;
             return 0;
@@ -58,7 +58,7 @@ subtest "negative", sub {
     my $tracker = new_ok "State::Tracker";
 
     my $executed = 0;
-    $tracker->callback(
+    $tracker->track(
         sub {
             $executed++;
             return 1;
@@ -75,7 +75,7 @@ subtest "both", sub {
     my $tracker = new_ok "State::Tracker";
 
     my $executed = 0;
-    $tracker->callback(
+    $tracker->track(
         sub {
             $executed++;
             return 1;
@@ -99,12 +99,12 @@ subtest "counter", sub {
     my $tracker = new_ok "State::Tracker";
 
     my $executed = 0;
-    $tracker->callback(
+    $tracker->track(
         sub {
             $executed++;
             return 1;
         },
-        [$flag1 => '<=' => 2],
+        [$flag1, '>=', 2],
     );
     $tracker + $flag1;
     is($executed, 0);
@@ -112,11 +112,11 @@ subtest "counter", sub {
     is($executed, 1);
 };
 
-# subtest "callback", sub {
+# subtest "track", sub {
 #     my $tracker = new_ok "State::Tracker";
 # 
 #     my $executed = 0;
-#     $tracker->callback(
+#     $tracker->track(
 #         sub {
 #             $executed++;
 #         },
@@ -143,5 +143,10 @@ FLAG1,
 
 FLAG1|-FLAG2|FLAG3==30|-FLAG4<=-40
 
-"$flag1|-$flag2|$flag3==30|-$flag4<=-40"
-"$flag1|-$flag2|$flag3==30|-$flag4<=-40"
+"$flag1|~$flag2|$flag3==30|-$flag4<=-40"
+"$flag1|~$flag2|$flag3==30|-$flag4<=-40"
+
+$state
+$counter
+
+$tracker
